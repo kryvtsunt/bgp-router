@@ -125,8 +125,18 @@ class Router:
 
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
-        # TODO
-        return False
+        print("Data is:", packet)
+        print("Routing table is:", self.routes.keys())
+        print("Sockets ips:", self.sockets.keys())
+        ip = packet[DEST]
+        for key in self.routes:
+            network = self.routes[key][NTWK]
+            mask = self.routes[key][NMSK]
+            if self.in_subnet(network,ip,mask):
+                self.sockets[self.routes[key][PEER]].send(json.dumps(packet).encode("ascii"))
+                print("Forward data to", network)
+                break;
+        return
 
     def coalesce(self):
         """	coalesce any routes that are right next to each other	"""
@@ -134,63 +144,88 @@ class Router:
         return False
 
     def update(self, srcif, packet):
+        # print("Recieve the update packet:", packet)
         """	handle update packets	"""
         # 1. Save copy of announcement (should the key be the src IP or the src socket?
         self.updates[srcif] = packet
         # 2. Add an entry to the forwarding table
+
+        # TODO: need to change compare_route
         if (packet[MESG][NTWK] in self.routes):
             self.routes[packet[MESG][NTWK]] = self.compare_route(self.routes[packet[MESG][NTWK]], packet[MESG])
         else:
-            self.routes[packet[MESG][NTWK]] = packet[MESG]
+            self.routes[packet[MESG][NTWK]] = {"network": packet[MESG][NTWK], "netmask": packet[MESG][NMSK], "peer": packet[SRCE]}
+
         # 3. Potentially send copies of the announcement to neighboring routers
         if (self.relations[packet[SRCE]] == PEER):
             """ send to everyone """
         else:
             """ send to customers"""
+        src = packet[SRCE]
+        dest = packet[DEST]
+        for ip in self.sockets:
+            if (ip != src):
+                packet[SRCE] = dest
+                packet[DEST] = ip
+                # print("Forward the update packet:", packet)
+                self.sockets[ip].send(json.dumps(packet).encode("ascii"))
+
+
 
         return False
 
 
-def revoke(self, packet):
-    """	handle revoke packets	"""
-    # TODO
-    return True
+    def revoke(self, packet):
+        """	handle revoke packets	"""
+        # TODO
+        return True
 
 
-def dump(self, packet):
-    """	handles dump table requests	"""
-    # TODO
-    return True
+    def dump(self, packet):
+        """	handles dump table requests	"""
+        # TODO
+        respond = {}
+        msg = []
+        for key in self.routes:
+            msg.append(self.routes[key])
+
+        respond[SRCE] = packet[DEST]
+        respond[DEST] = packet[SRCE]
+        respond[TYPE] = TABL
+        respond[MESG] = msg
+        print(respond)
+        self.sockets[respond[DEST]].send(json.dumps(respond).encode("ascii"))
+        return
 
 
-def handle_packet(self, srcif, packet):
-    """	dispatches a packet """
-    packet_type = packet[TYPE]
-    if (packet_type == DATA):
-        pass
-    elif (packet_type == UPDT):
-        self.update(self, srcif, packet)
-    elif (packet_type == RVKE):
-        pass
-    elif (packet_type == DUMP):
-        pass
-    elif (packet_type == NRTE):
-        pass
-    elif (packet_type == TABL):
-        pass
+    def handle_packet(self, srcif, packet):
+        """	dispatches a packet """
+        packet_type = packet[TYPE]
+        if packet_type == DATA:
+            self.forward(self, packet)
+        elif packet_type == UPDT:
+            self.update(srcif, packet)
+        elif packet_type == RVKE:
+            pass
+        elif packet_type == DUMP:
+            self.dump(packet)
+        elif packet_type == NRTE:
+            pass
+        elif packet_type == TABL:
+            pass
 
-    return False
+        return False
 
 
-def send_error(self, conn, msg):
-    """ Send a no_route error message """
-    # TODO
-    return None
+    def send_error(self, conn, msg):
+        """ Send a no_route error message """
+        # TODO
+        return None
 
     def compare_route(self, curr_msg, other_msg):
-        """ 1 if curr_msg is a better route than other_msg """
-        """ 0 if curr_msg is the same route as other_msg """
-        """ -1 if curr_msg is a worse route than other_msg """
+        """ 1 if curr_msg is a better route than other_msg
+         0 if curr_msg is the same route as other_msg
+        -1 if curr_msg is a worse route than other_msg """
         if self.compare_localpref(curr_msg, other_msg) == 0:
             if self.compare_selfOrigin(curr_msg, other_msg) == 0:
                 if self.compare_ASPath(curr_msg, other_msg) == 0:
@@ -206,9 +241,9 @@ def send_error(self, conn, msg):
             return self.compare_localpref(curr_msg, other_msg)
 
     def compare_localpref(self, curr_msg, other_msg):
-        """ 1 if curr_msg has a better localpref than other_msg """
-        """ 0 if curr_msg has the same localpref as other_msg """
-        """ -1 if curr_msg has a worse localpref than other_msg """
+        """ 1 if curr_msg has a better localpref than other_msg
+         0 if curr_msg has the same localpref as other_msg
+         -1 if curr_msg has a worse localpref than other_msg """
         if (curr_msg[LPRF] > other_msg[LPRF]):
             return 1
         elif (curr_msg[LPRF] == other_msg[LPRF]):
@@ -217,20 +252,22 @@ def send_error(self, conn, msg):
             return -1
 
     def compare_selfOrigin(self, curr_msg, other_msg):
-        """ 1 if curr_msg has a better selfOrigin than other_msg """
-        """ 0 if curr_msg has the same selfOrigin as other_msg """
-        """ -1 if curr_msg has a worse selfOrigin than other_msg """
-        if (curr_msg[SORG] & & !other_msg[SORG]):
-            return 1
-        elif (curr_msg[SORG] & & other_msg[SORG]):
-            return 0
-        elif (!curr_msg[SORG] & & other_msg[SORG]):
-            return -1
+        """ 1 if curr_msg has a better selfOrigin than other_msg
+         0 if curr_msg has the same selfOrigin as other_msg
+         -1 if curr_msg has a worse selfOrigin than other_msg """
+
+        # if (curr_msg[SORG] and !other_msg[SORG]):
+        #     return 1
+        # elif (curr_msg[SORG] and other_msg[SORG]):
+        #     return 0
+        # elif (!curr_msg[SORG] and other_msg[SORG]):
+        #     return -1
+        pass
 
     def compare_ASPath(self, curr_msg, other_msg):
-        """ 1 if curr_msg has a better ASPath than other_msg """
-        """ 0 if curr_msg has the same ASPath as other_msg """
-        """ -1 if curr_msg has a worse ASPath than other_msg """
+        """ 1 if curr_msg has a better ASPath than other_msg
+         0 if curr_msg has the same ASPath as other_msg
+         -1 if curr_msg has a worse ASPath than other_msg """
         if (len(curr_msg[APTH]) < len(other_msg[APTH])):
             return 1
         elif (len(curr_msg[APTH]) == len(other_msg[APTH])):
@@ -242,13 +279,16 @@ def send_error(self, conn, msg):
         """ 1 if curr_msg has a better origin than other_msg
          0 if curr_msg has the same origin as other_msg
         -1 if curr_msg has a worse origin than other_msg """
-        if ((curr_msg[ORIG] == INGP & & other_msg[ORIG] != INGP) | | (
-                            curr_msg[ORIG] == ENGP & & other_msg[ORIG] != INGP & & other_msg[ORIG] != ENGP)):
+
+        if ((curr_msg[ORIG] == INGP and other_msg[ORIG] != INGP) or (
+                            curr_msg[ORIG] == EXGP and other_msg[ORIG] != INGP and other_msg[ORIG] != EXGP)):
             return 1
+
         elif (curr_msg[ORIG] == other_msg[ORIG]):
             return 0
-        elif ((curr_msg[ORIG] == UNKN & & other_msg[ORIG] != UNKN) | | (
-                            curr_msg[ORIG] == ENGP & & other_msg[ORIG] != UNKN & & other_msg[ORIG] != ENGP)):
+
+        elif ((curr_msg[ORIG] == UNKN and other_msg[ORIG] != UNKN) or (
+                            curr_msg[ORIG] == EXGP and other_msg[ORIG] != UNKN and other_msg[ORIG] != EXGP)):
             return -1
 
     def apply_netmask(self, network, netmask):
@@ -257,30 +297,36 @@ def send_error(self, conn, msg):
         nm = netmask.split('.')
         netmasked = []
         for part in range(len(nw)):
-            netmasked.append(nw[part] & nm[part])
+            netmasked.append(str(int(nw[part]) & int(nm[part])))
+        r = '.'.join(netmasked)
+        print("APPLY_NEMASK:", r)
+        return r
 
-        return '.'.join(netmasked)
+    def in_subnet(self, subnet, network, netmask):
+        """ applies the given netmask to the subnet and the network, True is the results are the same"""
+        subnet2 = self.apply_netmask(subnet, netmask)
+        network2 = self.apply_netmask(network, netmask)
+        return subnet2 == network2
 
+    def run(self):
+        while True:
+            socks = select.select(self.sockets.values(), [], [], 0.1)[0]
+            for conn in socks:
+                try:
+                    k = conn.recv(65535)
+                except:
+                    # either died on a connection reset, or was SIGTERM's by parent
+                    return
+                if k:
+                    for sock in self.sockets:
+                        if self.sockets[sock] == conn:
+                            srcif = sock
+                    msg = json.loads(k.decode("ascii"))
+                    if not self.handle_packet(srcif, msg):
+                        self.send_error(conn, msg)
+                else:
+                    return
 
-def run(self):
-    while True:
-        socks = select.select(self.sockets.values(), [], [], 0.1)[0]
-        for conn in socks:
-            try:
-                k = conn.recv(65535)
-            except:
-                # either died on a connection reset, or was SIGTERM's by parent
-                return
-            if k:
-                for sock in self.sockets:
-                    if self.sockets[sock] == conn:
-                        srcif = sock
-                msg = json.loads(k)
-                if not self.handle_packet(srcif, msg):
-                    self.send_error(conn, msg)
-            else:
-                return
-    return
 
 
 if __name__ == "__main__":
