@@ -43,7 +43,6 @@ INGP = "IGP"
 EXGP = "EGP"
 UNKN = "UNK"
 
-
 ##########################################################################################
 
 class Router:
@@ -125,17 +124,17 @@ class Router:
 
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
-        print("Data is:", packet)
-        print("Routing table is:", self.routes.keys())
-        print("Sockets ips:", self.sockets.keys())
+        if DEBUG:
+            print("Data is:", packet)
+            print("Routing table is:", self.routes.keys())
+            print("Sockets ips:", self.sockets.keys())
         ip = packet[DEST]
-        for key in self.routes:
-            network = self.routes[key][NTWK]
-            mask = self.routes[key][NMSK]
+        for key, value in self.routes.items():
+            network = value[NTWK]
+            mask = value[NMSK]
             if self.in_subnet(network,ip,mask):
-                self.sockets[self.routes[key][PEER]].send(json.dumps(packet).encode("ascii"))
-                print("Forward data to", network)
-                break;
+                self.sockets[value[PEER]].send(json.dumps(packet).encode("ascii"))
+                break
         return
 
     def coalesce(self):
@@ -144,34 +143,36 @@ class Router:
         return False
 
     def update(self, srcif, packet):
-        # print("Recieve the update packet:", packet)
         """	handle update packets	"""
         # 1. Save copy of announcement (should the key be the src IP or the src socket?
-        self.updates[srcif] = packet
         # 2. Add an entry to the forwarding table
-
-        # TODO: need to change compare_route
-        if (packet[MESG][NTWK] in self.routes):
-            self.routes[packet[MESG][NTWK]] = self.compare_route(self.routes[packet[MESG][NTWK]], packet[MESG])
-        else:
-            self.routes[packet[MESG][NTWK]] = {"network": packet[MESG][NTWK], "netmask": packet[MESG][NMSK], "peer": packet[SRCE]}
-
         # 3. Potentially send copies of the announcement to neighboring routers
-        if (self.relations[packet[SRCE]] == PEER):
-            """ send to everyone """
+        # TODO: need to change compare_route
+        if DEBUG:
+            print("Recieve the update packet:", packet)
+        self.updates[srcif] = packet
+        if (packet[MESG][NTWK] in self.routes):
+            self.routes[packet[MESG][NTWK]] = self.compare_route(self.routes[packet[MESG][NTWK]],
+                                                                 packet[MESG])
         else:
-            """ send to customers"""
+            self.routes[packet[MESG][NTWK]] = {"network": packet[MESG][NTWK],
+                                               "netmask": packet[MESG][NMSK],
+                                               "peer": packet[SRCE]}
+
+        # if (self.relations[packet[SRCE]] == PEER):
+        #     """ send to everyone """
+        # else:
+        #     """ send to customers"""
+
         src = packet[SRCE]
-        dest = packet[DEST]
-        for ip in self.sockets:
-            if (ip != src):
-                packet[SRCE] = dest
+        dst = packet[DEST]
+        for ip, sock in self.sockets.items():
+            if ip != src:
+                packet[SRCE] = dst
                 packet[DEST] = ip
-                # print("Forward the update packet:", packet)
-                self.sockets[ip].send(json.dumps(packet).encode("ascii"))
-
-
-
+                if DEBUG:
+                    print("Forward the update packet:", packet)
+                sock.send(json.dumps(packet).encode("ascii"))
         return False
 
 
@@ -188,12 +189,12 @@ class Router:
         msg = []
         for key in self.routes:
             msg.append(self.routes[key])
-
         respond[SRCE] = packet[DEST]
         respond[DEST] = packet[SRCE]
         respond[TYPE] = TABL
         respond[MESG] = msg
-        print(respond)
+        if DEBUG:
+            print(respond)
         self.sockets[respond[DEST]].send(json.dumps(respond).encode("ascii"))
         return
 
@@ -292,21 +293,19 @@ class Router:
             return -1
 
     def apply_netmask(self, network, netmask):
-        """ applies the given netmask to the given network, returns the result as a string"""
+        """ applies the given subnet mask to the given network, returns the result as a string"""
         nw = network.split('.')
         nm = netmask.split('.')
         netmasked = []
         for part in range(len(nw)):
             netmasked.append(str(int(nw[part]) & int(nm[part])))
-        r = '.'.join(netmasked)
-        print("APPLY_NEMASK:", r)
-        return r
+        return '.'.join(netmasked)
 
-    def in_subnet(self, subnet, network, netmask):
-        """ applies the given netmask to the subnet and the network, True is the results are the same"""
-        subnet2 = self.apply_netmask(subnet, netmask)
-        network2 = self.apply_netmask(network, netmask)
-        return subnet2 == network2
+    def in_subnet(self, network1, network2, netmask):
+        """ applies the given netmask to the networks, True if the results are the same"""
+        subnet1 = self.apply_netmask(network1, netmask)
+        subnet2 = self.apply_netmask(network2, netmask)
+        return subnet1 == subnet2
 
     def run(self):
         while True:
