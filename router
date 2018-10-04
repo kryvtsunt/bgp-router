@@ -1,9 +1,9 @@
 #!/usr/bin/python3
 
-import argparse, socket, time, json, select, struct, math
+import argparse, socket, time, json, select, struct, math, functools
 
-# DEBUG = True
-DEBUG = False
+DEBUG = True
+#DEBUG = False
 
 parser = argparse.ArgumentParser(description='route packets')
 parser.add_argument('networks', metavar='networks', type=str, nargs='+', help="networks")
@@ -43,7 +43,91 @@ INGP = "IGP"
 EXGP = "EGP"
 UNKN = "UNK"
 
-##########################################################################################
+
+def compare_route(curr_msg, other_msg):
+    """ 1 if curr_msg is a better route than other_msg
+     0 if curr_msg is the same route as other_msg
+    -1 if curr_msg is a worse route than other_msg """
+    if compare_localpref(curr_msg, other_msg) == 0:
+        if compare_selfOrigin(curr_msg, other_msg) == 0:
+            if compare_ASPath(curr_msg, other_msg) == 0:
+                if compare_origin(curr_msg, other_msg) == 0:
+                    return compare_ip(curr_msg, other_msg)
+                else:
+                    return compare_origin(curr_msg, other_msg)
+            else:
+                return compare_ASPath(curr_msg, other_msg)
+        else:
+            return compare_selfOrigin(curr_msg, other_msg)
+    else:
+        return compare_localpref(curr_msg, other_msg)
+
+
+def compare_ip(curr_msg, other_msg):
+    """ applies the given subnet mask to the given network, returns the result as a string"""
+    nw = curr_msg[PEER].split('.')
+    nw2 = other_msg[PEER].split('.')
+    for part in range(len(nw)):
+        if int(nw[part]) < int(nw2[part]):
+            return 1
+        elif int(nw[part]) > int(nw2[part]):
+            return -1
+        else:
+            continue
+
+
+def compare_localpref(curr_msg, other_msg):
+    """ 1 if curr_msg has a better localpref than other_msg
+     0 if curr_msg has the same localpref as other_msg
+     -1 if curr_msg has a worse localpref than other_msg """
+    if (int(curr_msg[LPRF]) > int(other_msg[LPRF])):
+        return 1
+    elif (int(curr_msg[LPRF]) == int(other_msg[LPRF])):
+        return 0
+    elif (int(curr_msg[LPRF]) < int(other_msg[LPRF])):
+        return -1
+
+
+def compare_selfOrigin(curr_msg, other_msg):
+    """ 1 if curr_msg has a better selfOrigin than other_msg
+     0 if curr_msg has the same selfOrigin as other_msg
+     -1 if curr_msg has a worse selfOrigin than other_msg """
+
+    if curr_msg[SORG] == 'True' and other_msg[SORG] == 'False':
+        return 1
+    elif curr_msg[SORG] == 'False' and other_msg[SORG] == 'True':
+        return -1
+    else:
+        return 0
+
+
+
+def compare_ASPath(curr_msg, other_msg):
+    """ 1 if curr_msg has a better ASPath than other_msg
+     0 if curr_msg has the same ASPath as other_msg
+     -1 if curr_msg has a worse ASPath than other_msg """
+    if (len(curr_msg[APTH]) < len(other_msg[APTH])):
+        return 1
+    elif (len(curr_msg[APTH]) == len(other_msg[APTH])):
+        return 0
+    elif (len(curr_msg[APTH]) > len(other_msg[APTH])):
+        return -1
+
+
+def compare_origin(curr_msg, other_msg):
+    """ 1 if curr_msg has a better origin than other_msg
+     0 if curr_msg has the same origin as other_msg
+    -1 if curr_msg has a worse origin than other_msg """
+
+    if ((curr_msg[ORIG] == INGP and other_msg[ORIG] != INGP) or (
+                        curr_msg[ORIG] == EXGP and other_msg[ORIG] != INGP and other_msg[ORIG] != EXGP)):
+        return 1
+
+    elif (curr_msg[ORIG] == other_msg[ORIG]):
+        return 0
+
+    else:
+        return -1
 
 class Router:
     routes = None
@@ -52,7 +136,7 @@ class Router:
     sockets = None
 
     def __init__(self, networks):
-        self.routes = {}  # source IP : message
+        self.routes = []  # source IP : message
         self.updates = {}  # ????? : packet
         self.relations = {}  # IP Address : relationship
         self.sockets = {}  # IP Address : socket
@@ -125,17 +209,26 @@ class Router:
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
         if DEBUG:
-            print("Data is:", packet)
-            print("Routing table is:", self.routes.keys())
-            print("Sockets ips:", self.sockets.keys())
+            print("Data destination:", packet[DEST])
+            for r in self.routes:
+                print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
+            # print("Sockets ips:", self.sockets.keys())
         ip = packet[DEST]
-        for key, value in self.routes.items():
-            network = value[NTWK]
-            mask = value[NMSK]
+        destinations = []
+
+        for item in self.routes:
+            network = item[NTWK]
+            mask = item[NMSK]
             if self.in_subnet(network,ip,mask):
-                self.sockets[value[PEER]].send(json.dumps(packet).encode("ascii"))
-                break
+                destinations.append(item)
+        to = sorted(destinations, key= functools.cmp_to_key(compare_route), reverse = True)
+        for d in to:
+            print("SORTED ROW", d)
+        self.sockets[to[0][PEER]].send(json.dumps(packet).encode("ascii"))
         return
+
+    def compare(self, a):
+        return len(a[APTH])
 
     def coalesce(self):
         """	coalesce any routes that are right next to each other	"""
@@ -148,16 +241,21 @@ class Router:
         # 2. Add an entry to the forwarding table
         # 3. Potentially send copies of the announcement to neighboring routers
         # TODO: need to change compare_route
-        if DEBUG:
-            print("Recieve the update packet:", packet)
+        #if DEBUG:
+            #print("Recieve the update packet:", packet)
         self.updates[srcif] = packet
-        if (packet[MESG][NTWK] in self.routes):
-            self.routes[packet[MESG][NTWK]] = self.compare_route(self.routes[packet[MESG][NTWK]],
-                                                                 packet[MESG])
-        else:
-            self.routes[packet[MESG][NTWK]] = {"network": packet[MESG][NTWK],
-                                               "netmask": packet[MESG][NMSK],
-                                               "peer": packet[SRCE]}
+        # if (packet[MESG][NTWK] in self.routes) and \
+        #         (self.compare_route(self.routes[packet[MESG][NTWK]],packet[MESG]) == 1):
+        #         if DEBUG:
+        #             print("The rejected entry is ", packet[MESG])
+        # else:
+        self.routes.append({NTWK: packet[MESG][NTWK],
+                                               NMSK: packet[MESG][NMSK],
+                                               PEER: packet[SRCE],
+                                               LPRF: packet[MESG][LPRF],
+                                               SORG: packet[MESG][SORG],
+                                               APTH: packet[MESG][APTH],
+                                               ORIG: packet[MESG][ORIG]})
 
         # if (self.relations[packet[SRCE]] == PEER):
         #     """ send to everyone """
@@ -170,8 +268,8 @@ class Router:
             if ip != src:
                 packet[SRCE] = dst
                 packet[DEST] = ip
-                if DEBUG:
-                    print("Forward the update packet:", packet)
+                # if DEBUG:
+                #     print("Forward the update packet:", packet)
                 sock.send(json.dumps(packet).encode("ascii"))
         return False
 
@@ -187,8 +285,8 @@ class Router:
         # TODO
         respond = {}
         msg = []
-        for key in self.routes:
-            msg.append(self.routes[key])
+        for item in self.routes:
+            msg.append(item)
         respond[SRCE] = packet[DEST]
         respond[DEST] = packet[SRCE]
         respond[TYPE] = TABL
@@ -223,74 +321,7 @@ class Router:
         # TODO
         return None
 
-    def compare_route(self, curr_msg, other_msg):
-        """ 1 if curr_msg is a better route than other_msg
-         0 if curr_msg is the same route as other_msg
-        -1 if curr_msg is a worse route than other_msg """
-        if self.compare_localpref(curr_msg, other_msg) == 0:
-            if self.compare_selfOrigin(curr_msg, other_msg) == 0:
-                if self.compare_ASPath(curr_msg, other_msg) == 0:
-                    if self.compare_origin(curr_msg, other_msg) == 0:
-                        return 0
-                    else:
-                        return self.compare_origin(curr_msg, other_msg)
-                else:
-                    return self.compare_ASPath(curr_msg, other_msg)
-            else:
-                return self.compare_selfOrigin(curr_msg, other_msg)
-        else:
-            return self.compare_localpref(curr_msg, other_msg)
 
-    def compare_localpref(self, curr_msg, other_msg):
-        """ 1 if curr_msg has a better localpref than other_msg
-         0 if curr_msg has the same localpref as other_msg
-         -1 if curr_msg has a worse localpref than other_msg """
-        if (curr_msg[LPRF] > other_msg[LPRF]):
-            return 1
-        elif (curr_msg[LPRF] == other_msg[LPRF]):
-            return 0
-        elif (curr_msg[LPRF] < other_msg[LPRF]):
-            return -1
-
-    def compare_selfOrigin(self, curr_msg, other_msg):
-        """ 1 if curr_msg has a better selfOrigin than other_msg
-         0 if curr_msg has the same selfOrigin as other_msg
-         -1 if curr_msg has a worse selfOrigin than other_msg """
-
-        # if (curr_msg[SORG] and !other_msg[SORG]):
-        #     return 1
-        # elif (curr_msg[SORG] and other_msg[SORG]):
-        #     return 0
-        # elif (!curr_msg[SORG] and other_msg[SORG]):
-        #     return -1
-        pass
-
-    def compare_ASPath(self, curr_msg, other_msg):
-        """ 1 if curr_msg has a better ASPath than other_msg
-         0 if curr_msg has the same ASPath as other_msg
-         -1 if curr_msg has a worse ASPath than other_msg """
-        if (len(curr_msg[APTH]) < len(other_msg[APTH])):
-            return 1
-        elif (len(curr_msg[APTH]) == len(other_msg[APTH])):
-            return 0
-        elif (len(curr_msg[APTH]) > len(other_msg[APTH])):
-            return -1
-
-    def compare_origin(self, curr_msg, other_msg):
-        """ 1 if curr_msg has a better origin than other_msg
-         0 if curr_msg has the same origin as other_msg
-        -1 if curr_msg has a worse origin than other_msg """
-
-        if ((curr_msg[ORIG] == INGP and other_msg[ORIG] != INGP) or (
-                            curr_msg[ORIG] == EXGP and other_msg[ORIG] != INGP and other_msg[ORIG] != EXGP)):
-            return 1
-
-        elif (curr_msg[ORIG] == other_msg[ORIG]):
-            return 0
-
-        elif ((curr_msg[ORIG] == UNKN and other_msg[ORIG] != UNKN) or (
-                            curr_msg[ORIG] == EXGP and other_msg[ORIG] != UNKN and other_msg[ORIG] != EXGP)):
-            return -1
 
     def apply_netmask(self, network, netmask):
         """ applies the given subnet mask to the given network, returns the result as a string"""
