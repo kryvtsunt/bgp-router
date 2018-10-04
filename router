@@ -137,7 +137,8 @@ class Router:
 
     def __init__(self, networks):
         self.routes = []  # source IP : message
-        self.updates = {}  # ????? : packet
+        self.updates = []  # ????? : packet
+        self.revokes = []
         self.relations = {}  # IP Address : relationship
         self.sockets = {}  # IP Address : socket
         for relationship in networks:
@@ -208,11 +209,11 @@ class Router:
 
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
-        if DEBUG:
-            print("Data destination:", packet[DEST])
-            for r in self.routes:
-                print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
-            # print("Sockets ips:", self.sockets.keys())
+        # if DEBUG:
+        #     print("Data :", packet)
+        #     for r in self.routes:
+        #         print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
+        #     print("Sockets ips:", self.sockets.keys())
         ip = packet[DEST]
         destinations = []
 
@@ -222,10 +223,13 @@ class Router:
             if self.in_subnet(network,ip,mask):
                 destinations.append(item)
         to = sorted(destinations, key= functools.cmp_to_key(compare_route), reverse = True)
-        for d in to:
-            print("SORTED ROW", d)
-        self.sockets[to[0][PEER]].send(json.dumps(packet).encode("ascii"))
-        return
+        # for d in to:
+        #     print("SORTED ROW", d)
+        if len(to) > 0:
+            self.sockets[to[0][PEER]].send(json.dumps(packet).encode("ascii"))
+        else:
+            return False
+        return True
 
     def compare(self, a):
         return len(a[APTH])
@@ -243,7 +247,7 @@ class Router:
         # TODO: need to change compare_route
         #if DEBUG:
             #print("Recieve the update packet:", packet)
-        self.updates[srcif] = packet
+        self.updates.append(packet)
         # if (packet[MESG][NTWK] in self.routes) and \
         #         (self.compare_route(self.routes[packet[MESG][NTWK]],packet[MESG]) == 1):
         #         if DEBUG:
@@ -271,12 +275,35 @@ class Router:
                 # if DEBUG:
                 #     print("Forward the update packet:", packet)
                 sock.send(json.dumps(packet).encode("ascii"))
-        return False
-
+        return True
 
     def revoke(self, packet):
-        """	handle revoke packets	"""
-        # TODO
+
+        print("got revoke", packet)
+        msg = packet[MESG]
+        self.revokes.append(packet)
+        for r in self.routes:
+            print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
+        for item in msg:
+            for route in self.routes:
+                if (item[NTWK] == route[NTWK] and item[NMSK] == route[NMSK] and packet[SRCE] == route[PEER]):
+                    print("remove from table", route)
+                    self.routes.remove(route)
+
+        for r in self.routes:
+            print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
+        src = packet[SRCE]
+        dst = packet[DEST]
+        print("send revoke from", dst)
+        for ip, sock in self.sockets.items():
+            if ip != src:
+                packet[SRCE] = dst
+                packet[DEST] = ip
+                print("Send revoke to", packet[DEST])
+                # if DEBUG:
+                #     print("Forward the update packet:", packet)
+                sock.send(json.dumps(packet).encode("ascii"))
+
         return True
 
 
@@ -291,34 +318,48 @@ class Router:
         respond[DEST] = packet[SRCE]
         respond[TYPE] = TABL
         respond[MESG] = msg
-        if DEBUG:
-            print(respond)
+        # if DEBUG:
+        #     print(respond)
         self.sockets[respond[DEST]].send(json.dumps(respond).encode("ascii"))
-        return
+        return True
 
 
     def handle_packet(self, srcif, packet):
         """	dispatches a packet """
         packet_type = packet[TYPE]
         if packet_type == DATA:
-            self.forward(self, packet)
+            return self.forward(self, packet)
+
         elif packet_type == UPDT:
-            self.update(srcif, packet)
+            return self.update(srcif, packet)
         elif packet_type == RVKE:
-            pass
+            return self.revoke(packet)
         elif packet_type == DUMP:
-            self.dump(packet)
-        elif packet_type == NRTE:
-            pass
+            return self.dump(packet)
         elif packet_type == TABL:
             pass
 
+        # print("return to handle")
         return False
 
 
     def send_error(self, conn, msg):
         """ Send a no_route error message """
         # TODO
+        # print("error handle !!!!!!!!!!!!!!!!!!!!!!!")
+        to = ''
+        for ip, sock in self.sockets.items():
+            if sock == conn:
+                to = ip
+        packet = {}
+        packet[SRCE] = ip[:-1] + "1"
+        packet[DEST] = msg[SRCE]
+        packet[TYPE] = NRTE
+        packet[MESG] = {}
+        # print("send NRTE to", msg[SRCE])
+        # print("send from", ip[:-1] + "1")
+        # self.sockets[self.sockets[conn]].send(json.dumps(packet).encode("ascii"))
+        conn.send(json.dumps(packet).encode("ascii"))
         return None
 
 
