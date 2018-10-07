@@ -48,20 +48,35 @@ def compare_route(curr_msg, other_msg):
     """ 1 if curr_msg is a better route than other_msg
      0 if curr_msg is the same route as other_msg
     -1 if curr_msg is a worse route than other_msg """
-    if compare_localpref(curr_msg, other_msg) == 0:
-        if compare_selfOrigin(curr_msg, other_msg) == 0:
-            if compare_ASPath(curr_msg, other_msg) == 0:
-                if compare_origin(curr_msg, other_msg) == 0:
-                    return compare_ip(curr_msg, other_msg)
+    if compare_longest_prefix(curr_msg, other_msg) == 0:
+        if compare_localpref(curr_msg, other_msg) == 0:
+            if compare_selfOrigin(curr_msg, other_msg) == 0:
+                if compare_ASPath(curr_msg, other_msg) == 0:
+                    if compare_origin(curr_msg, other_msg) == 0:
+                        return compare_ip(curr_msg, other_msg)
+                    else:
+                        return compare_origin(curr_msg, other_msg)
                 else:
-                    return compare_origin(curr_msg, other_msg)
+                    return compare_ASPath(curr_msg, other_msg)
             else:
-                return compare_ASPath(curr_msg, other_msg)
+                return compare_selfOrigin(curr_msg, other_msg)
         else:
-            return compare_selfOrigin(curr_msg, other_msg)
+            return compare_localpref(curr_msg, other_msg)
     else:
-        return compare_localpref(curr_msg, other_msg)
+        return compare_longest_prefix(curr_msg, other_msg)
 
+
+def compare_longest_prefix(curr_msg, other_msg):
+    """ applies the given subnet mask to the given network, returns the result as a string"""
+    nw = curr_msg[NMSK].split('.')
+    nw2 = other_msg[NMSK].split('.')
+    for part in range(len(nw)):
+        if int(nw[part]) < int(nw2[part]):
+            return -1
+        elif int(nw[part]) > int(nw2[part]):
+            return 1
+        else:
+            continue
 
 def compare_ip(curr_msg, other_msg):
     """ applies the given subnet mask to the given network, returns the result as a string"""
