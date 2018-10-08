@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import argparse, socket, time, json, select, struct, math, functools
+import argparse, socket, time, json, select, struct, math, functools, copy
 
 DEBUG = True
 #DEBUG = False
@@ -43,6 +43,74 @@ INGP = "IGP"
 EXGP = "EGP"
 UNKN = "UNK"
 
+def mask_2_cidr(mask):
+    n = 0
+    m = mask.split(".")
+    for i in range(len(m)):
+        m[i] = bin(int(m[i]))
+    m_str = ''.join(m)
+    return m_str.count('1')
+
+def cidr_2_mask(cidr):
+    m = ""
+    for i in range(1, 33):
+        if i <= cidr:
+            m += '1'
+        else:
+            m += '0'
+        if i%8 ==0:
+            m += '.'
+    m = m[:-1]
+    b = m.split('.')
+    d = []
+    print("array", b)
+    for i in range(len(b)):
+        d.append(str(int(b[i], 2)))
+    return ".".join(d)
+
+def apply_netmask(network, netmask):
+    """ applies the given subnet mask to the given network, returns the result as a string"""
+    nw = network.split('.')
+    nm = netmask.split('.')
+    netmasked = []
+    for part in range(len(nw)):
+        netmasked.append(str(int(nw[part]) & int(nm[part])))
+    return '.'.join(netmasked)
+
+def in_subnet(network1, network2, netmask):
+    """ applies the given netmask to the networks, True if the results are the same"""
+    subnet1 = apply_netmask(network1, netmask)
+    subnet2 = apply_netmask(network2, netmask)
+    return subnet1 == subnet2
+
+
+def aggregate(curr_msg, other_msg):
+    if (curr_msg != other_msg and
+        compare_longest_prefix(curr_msg, other_msg) == 0 and
+        compare_localpref(curr_msg, other_msg) == 0 and
+        compare_selfOrigin(curr_msg, other_msg) == 0 and
+        compare_ASPath(curr_msg, other_msg) == 0 and
+        compare_origin(curr_msg, other_msg) == 0 and
+        compare_peer(curr_msg, other_msg) == 0):
+            print("Aggregate", curr_msg, other_msg)
+            network1 = curr_msg[NTWK]
+            network2 = other_msg[NTWK]
+            mask = curr_msg[NMSK]
+            # print("Initial mask", mask)
+            mask_1 = cidr_2_mask(mask_2_cidr(mask) - 1)
+            # print("Mask -1", mask_1)
+            if apply_netmask(network1, mask_1) == apply_netmask(network2, mask_1):
+                new_msg = copy.copy(curr_msg)
+                new_msg[NTWK] = apply_netmask(network1, mask_1)
+                new_msg[NMSK] = mask_1
+                print("Aggregation complete", new_msg)
+                return new_msg
+    return None
+
+
+
+
+
 
 def compare_route(curr_msg, other_msg):
     """ 1 if curr_msg is a better route than other_msg
@@ -53,7 +121,7 @@ def compare_route(curr_msg, other_msg):
             if compare_selfOrigin(curr_msg, other_msg) == 0:
                 if compare_ASPath(curr_msg, other_msg) == 0:
                     if compare_origin(curr_msg, other_msg) == 0:
-                        return compare_ip(curr_msg, other_msg)
+                        return compare_ip(curr_msg, other_msg) == 0
                     else:
                         return compare_origin(curr_msg, other_msg)
                 else:
@@ -65,9 +133,17 @@ def compare_route(curr_msg, other_msg):
     else:
         return compare_longest_prefix(curr_msg, other_msg)
 
+def compare_peer(curr_msg, other_msg):
+    if curr_msg[PEER] > other_msg[PEER]:
+        return 1
+    elif other_msg[PEER] > curr_msg[PEER]:
+        return -1
+    else:
+        return 0
 
+
+# FIX it
 def compare_longest_prefix(curr_msg, other_msg):
-    """ applies the given subnet mask to the given network, returns the result as a string"""
     nw = curr_msg[NMSK].split('.')
     nw2 = other_msg[NMSK].split('.')
     for part in range(len(nw)):
@@ -75,8 +151,7 @@ def compare_longest_prefix(curr_msg, other_msg):
             return -1
         elif int(nw[part]) > int(nw2[part]):
             return 1
-        else:
-            continue
+    return 0
 
 def compare_ip(curr_msg, other_msg):
     """ applies the given subnet mask to the given network, returns the result as a string"""
@@ -87,8 +162,7 @@ def compare_ip(curr_msg, other_msg):
             return 1
         elif int(nw[part]) > int(nw2[part]):
             return -1
-        else:
-            continue
+    return 0
 
 
 def compare_localpref(curr_msg, other_msg):
@@ -201,6 +275,21 @@ class Router:
         outroutes = []
         return outroutes
 
+    def aggregation(self):
+        new_routes = []
+        was_aggregated = False
+        for route in self.routes:
+            for route2 in self.routes:
+                new_route = aggregate(route, route2)
+                if new_route is not None:
+                    if not new_route in new_routes:
+                        self.routes.remove(route)
+                        self.routes.remove(route2)
+                        self.routes.append(new_route)
+                        return True
+        return False
+
+
     def get_route(self, srcif, daddr):
         """	Select the best route for a given address	"""
         # TODO
@@ -236,7 +325,7 @@ class Router:
             network = item[NTWK]
             mask = item[NMSK]
             peer = item[PEER]
-            if self.in_subnet(network,ip,mask):
+            if in_subnet(network,ip,mask):
                     # and (self.relations[peer] == CUST or self.relations[srcif] == CUST):
                 destinations.append(item)
 
@@ -282,6 +371,9 @@ class Router:
                                                APTH: packet[MESG][APTH],
                                                ORIG: packet[MESG][ORIG]})
 
+
+        while(self.aggregation()):
+            print("Going going gone")
 
         src = packet[SRCE]
         dst = packet[DEST]
@@ -371,6 +463,7 @@ class Router:
         elif packet_type == UPDT:
             return self.update(srcif, packet)
         elif packet_type == RVKE:
+            print("REVOKE MSG")
             return self.revoke(packet)
         elif packet_type == DUMP:
             return self.dump(packet)
@@ -402,20 +495,7 @@ class Router:
 
 
 
-    def apply_netmask(self, network, netmask):
-        """ applies the given subnet mask to the given network, returns the result as a string"""
-        nw = network.split('.')
-        nm = netmask.split('.')
-        netmasked = []
-        for part in range(len(nw)):
-            netmasked.append(str(int(nw[part]) & int(nm[part])))
-        return '.'.join(netmasked)
 
-    def in_subnet(self, network1, network2, netmask):
-        """ applies the given netmask to the networks, True if the results are the same"""
-        subnet1 = self.apply_netmask(network1, netmask)
-        subnet2 = self.apply_netmask(network2, netmask)
-        return subnet1 == subnet2
 
     def run(self):
         while True:
