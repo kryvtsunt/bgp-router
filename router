@@ -63,7 +63,7 @@ def cidr_2_mask(cidr):
     m = m[:-1]
     b = m.split('.')
     d = []
-    print("array", b)
+    # print("array", b)
     for i in range(len(b)):
         d.append(str(int(b[i], 2)))
     return ".".join(d)
@@ -92,7 +92,7 @@ def aggregate(curr_msg, other_msg):
         compare_ASPath(curr_msg, other_msg) == 0 and
         compare_origin(curr_msg, other_msg) == 0 and
         compare_peer(curr_msg, other_msg) == 0):
-            print("Aggregate", curr_msg, other_msg)
+            # print("Aggregate", curr_msg, other_msg)
             network1 = curr_msg[NTWK]
             network2 = other_msg[NTWK]
             mask = curr_msg[NMSK]
@@ -103,7 +103,7 @@ def aggregate(curr_msg, other_msg):
                 new_msg = copy.copy(curr_msg)
                 new_msg[NTWK] = apply_netmask(network1, mask_1)
                 new_msg[NMSK] = mask_1
-                print("Aggregation complete", new_msg)
+                # print("Aggregation complete", new_msg)
                 return new_msg
     return None
 
@@ -121,7 +121,7 @@ def compare_route(curr_msg, other_msg):
             if compare_selfOrigin(curr_msg, other_msg) == 0:
                 if compare_ASPath(curr_msg, other_msg) == 0:
                     if compare_origin(curr_msg, other_msg) == 0:
-                        return compare_ip(curr_msg, other_msg) == 0
+                        return compare_ip(curr_msg, other_msg)
                     else:
                         return compare_origin(curr_msg, other_msg)
                 else:
@@ -232,8 +232,8 @@ class Router:
         self.sockets = {}  # IP Address : socket
         for relationship in networks:
             network, relation = relationship.split("-")
-            if DEBUG:
-                print("Starting socket for", network, relation)
+            # if DEBUG:
+            #     print("Starting socket for", network, relation)
             self.sockets[network] = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             self.sockets[network].setblocking(0)
             self.sockets[network].connect(network)
@@ -313,12 +313,12 @@ class Router:
 
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
-        if DEBUG:
-            print("Data :", packet)
+        # if DEBUG:
+        #     print("Data :", packet)
 
-            for r in self.routes:
-                print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
-        #     print("Sockets ips:", self.sockets.keys())
+            # for r in self.routes:
+            #     print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
+            # print("Sockets ips:", self.sockets.keys())
         ip = packet[DEST]
         destinations = []
         for item in self.routes:
@@ -330,10 +330,13 @@ class Router:
                 destinations.append(item)
 
         to = sorted(destinations, key= functools.cmp_to_key(compare_route), reverse = True)
-        for d in to:
-            print("SORTED ROW", d)
-        if len(to) > 0 and (self.relations[to[0][PEER]] == CUST or self.relations[srcif] == CUST):
-            print("SEND TO:", to[0][PEER])
+        # for d in to:
+        #     print("SORTED ROW", d)
+        local = to[0][PEER]
+        local1 = self.relations[local]
+        local2 = self.relations[srcif]
+        if len(to) > 0 and (local1 == CUST or local2 == CUST):
+            # print("SEND TO:", to[0][PEER])
             self.sockets[to[0][PEER]].send(json.dumps(packet).encode("ascii"))
             return True
         else:
@@ -357,7 +360,7 @@ class Router:
         # TODO: need to change compare_route
         #if DEBUG:
             #print("Recieve the update packet:", packet)
-        self.updates.append(packet)
+        self.updates.append(copy.copy(packet))
         # if (packet[MESG][NTWK] in self.routes) and \
         #         (self.compare_route(self.routes[packet[MESG][NTWK]],packet[MESG]) == 1):
         #         if DEBUG:
@@ -373,8 +376,7 @@ class Router:
 
 
         while(self.aggregation()):
-            print("Going going gone")
-
+            continue
         src = packet[SRCE]
         dst = packet[DEST]
 
@@ -399,38 +401,93 @@ class Router:
 
         return True
 
-    def revoke(self, packet):
+    def disagregate(self):
+        routes = self.routes
+        self.routes = []
 
-        print("got revoke", packet)
+        print ("\nBefore disagreg")
+        for i in routes:
+            print(i)
+            print("\n")
+
+        for packet in self.updates:
+            if (packet[TYPE] == UPDT):
+                self.routes.append({NTWK: packet[MESG][NTWK],
+                                    NMSK: packet[MESG][NMSK],
+                                    PEER: packet[SRCE],
+                                    LPRF: packet[MESG][LPRF],
+                                    SORG: packet[MESG][SORG],
+                                    APTH: packet[MESG][APTH],
+                                    ORIG: packet[MESG][ORIG]})
+            elif (packet[TYPE] == RVKE):
+                msg = packet[MESG]
+                for item in msg:
+                    for route in self.routes:
+                        if (item[NTWK] == route[NTWK] and item[NMSK] == route[NMSK] and packet[SRCE] == route[PEER]):
+                            # print("remove from table", route)
+                            self.routes.remove(route)
+
+        print ("\nBefore aggregating back")
+        for i in self.routes:
+            print(i)
+            print("\n")
+
+        if (routes == self.routes):
+            print("SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAME")
+        else:
+            print("NOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOT SAAAAAAAAAAAAAAAAAAAAAAAAAAAAME")
+            print("\nold:")
+            for i in routes:
+                print(i)
+                print("\n")
+            print("\nnew:")
+            for i in self.routes:
+                print(i)
+                print("\n")
+
+
+        return True
+
+
+
+
+
+    def revoke(self, packet):
+        self.disagregate()
+        # print("got revoke", packet)
         msg = packet[MESG]
-        self.revokes.append(packet)
-        for r in self.routes:
-            print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
+        self.updates.append(copy.copy(packet))
+        # for r in self.routes:
+        #     print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
         for item in msg:
             for route in self.routes:
                 if (item[NTWK] == route[NTWK] and item[NMSK] == route[NMSK] and packet[SRCE] == route[PEER]):
-                    print("remove from table", route)
+                    # print("remove from table", route)
                     self.routes.remove(route)
 
-        for r in self.routes:
-            print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
+        while(self.aggregation()):
+            continue
+
+        # for r in self.routes:
+        #     print("Routing table entry:", r[NTWK], r[NMSK], r[PEER])
         src = packet[SRCE]
         dst = packet[DEST]
-        print("send revoke from", dst)
+        # print("send revoke from", dst)
+
 
         if self.relations[src] == CUST:
             for ip, sock in self.sockets.items():
                 if ip != src:
                     packet[SRCE] = dst
                     packet[DEST] = ip
-                    print("Send revoke to", packet[DEST])
+                    # print("Send revoke to", packet[DEST])
                     sock.send(json.dumps(packet).encode("ascii"))
         else:
             for ip, sock in self.sockets.items():
                 if ip != src and self.relations[ip] == CUST:
                     packet[SRCE] = dst
                     packet[DEST] = ip
-                    print("Send revoke to", packet[DEST])
+                    # print("Send revoke to", packet[DEST])
                     sock.send(json.dumps(packet).encode("ascii"))
 
         return True
@@ -454,7 +511,7 @@ class Router:
 
 
     def handle_packet(self, srcif, packet):
-        print("\n")
+        # print("\n")
         """	dispatches a packet """
         packet_type = packet[TYPE]
         if packet_type == DATA:
@@ -463,7 +520,7 @@ class Router:
         elif packet_type == UPDT:
             return self.update(srcif, packet)
         elif packet_type == RVKE:
-            print("REVOKE MSG")
+            # print("REVOKE MSG")
             return self.revoke(packet)
         elif packet_type == DUMP:
             return self.dump(packet)
@@ -487,8 +544,8 @@ class Router:
         packet[DEST] = msg[SRCE]
         packet[TYPE] = NRTE
         packet[MESG] = {}
-        print("send NRTE to", msg[SRCE])
-        print("send from", to[:-1] + "1")
+        # print("send NRTE to", msg[SRCE])
+        # print("send from", to[:-1] + "1")
         # self.sockets[self.sockets[conn]].send(json.dumps(packet).encode("ascii"))
         conn.send(json.dumps(packet).encode("ascii"))
         return None
