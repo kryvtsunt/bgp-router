@@ -16,4 +16,5 @@ We implemented some of the "helper" functions we thought would be included in th
 ### Our biggest challenge was overcomplicating things.
 For the milestone we needed to only provide basic support for update and data messages, we ignored this at first and tried to do everything for the update and data messages. We had some trouble aggregating the routes as we would add the aggregation and the initial two routes to our routing table.
 
-### For testing, we compared handwritten messages with carefully placed print statements telling us what was being sent to whom.
+### For testing, 
+we compared handwritten messages with carefully placed print statements telling us what was being sent to whom.
